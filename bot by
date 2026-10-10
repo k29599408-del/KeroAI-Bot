@@ -1,0 +1,70 @@
+
+import os
+import time
+import threading
+import requests
+from flask import Flask
+
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+
+app = Flask(__name__)
+TG = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+def reply(text):
+    response = requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "messages": [
+                {"role": "system", "content":
+                 "You are a helpful AI assistant. Reply in the user's language."},
+                {"role": "user", "content": text}
+            ]
+        },
+        timeout=60
+    )
+    response.raise_for_status()
+    return response.json()["choices"][0]["message"]["content"]
+
+def polling():
+    offset = None
+    while True:
+        try:
+            data = requests.get(
+                TG + "/getUpdates",
+                params={"offset": offset, "timeout": 20},
+                timeout=30
+            ).json()
+
+            for update in data.get("result", []):
+                offset = update["update_id"] + 1
+                msg = update.get("message", {})
+                chat_id = msg.get("chat", {}).get("id")
+                text = msg.get("text", "")
+
+                if not chat_id or not text:
+                    continue
+
+                try:
+                    answer = reply(text)
+                except Exception:
+                    answer = "حصل خطأ مؤقت، جرّب تاني."
+
+                requests.post(
+                    TG + "/sendMessage",
+                    json={"chat_id": chat_id, "text": answer[:4000]},
+                    timeout=20
+                )
+        except Exception:
+            time.sleep(5)
+
+@app.get("/")
+def home():
+    return "Kero AI Bot is running!"
+
+if __name__ == "__main__":
+    threading.Thread(target=polling, daemon=True).start()
+    app.run(host="0.0.0.0",
+            port=int(os.environ.get("PORT", 10000)))
